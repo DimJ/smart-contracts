@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Server | OAuth2-Blockchain</title>
+
+    <link rel="stylesheet" type="text/css" href="main.css">
+
+    <script src="./node_modules/web3/dist/web3.min.js"></script>
+
+</head>
+<body>
+    <div class="container">
+
+        <h2>Test Payment</h2>
+
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+
+    <script src="./initialSetup.js"></script>   
+    <!-- <script src="./paymentContract.js"></script> -->
+    <script src="./paymentContractInRinkeby.js"></script>
+
+    <script>       
+        // We have included the following contracts:
+        // - Payment
+        console.log("Test Payment Procedure. SCENARIO 1");
+        web3.personal.unlockAccount( web3.eth.accounts[0], "t0phost4m3*", 200000);
+        web3.eth.defaultAccount = web3.eth.accounts[0];
+        web3.personal.unlockAccount( web3.eth.accounts[1], "t1phost4m3*", 200000);
+        web3.personal.unlockAccount( web3.eth.accounts[2], "t2phost4m3*", 200000);
+        var client_S_key = "917ce29bf8a36392537d558dfaa4dc6e";
+        var Url = "http://localhost/oauth2/tokenJWT_hsmac.php";
+
+        var totalBytes = 0;
+        var priceOfTransfer = 0;
+
+        var httpRequest = 0;
+        var httpResponse = 0;
+
+        var setHashLockStart = 0;
+        var setHashLockEnd = 0;
+
+        var depositStart = 0;
+        var depositEnd = 0;
+        
+        var validationAndPaymentStart = 0;
+        var validationAndPaymentEnd = 0;
+
+        console.log( "Secret key in bytes: "+stringToBytes(client_S_key).length );  
+
+        console.log("Step 1(OAuth2): Send an http request.");
+        var startingTime = new Date().getTime();
+        var startingBlock = web3.eth.blockNumber;
+        httpRequest = new Date().getTime();
+
+        $.ajax({
+              url: Url,
+              beforeSend: function(xhr) {
+                xhr.setRequestHeader("Authorization", "Basic " + btoa("theClient:thePassword"));
+              },
+              type: 'POST',
+              dataType: 'json',
+              data: {grant_type:"client_credentials"},
+              success: function (data) {  
+                httpResponse = new Date().getTime();
+
+                console.log("Response: "+data);
+                var hashOfKey = "0x"+data.h;
+                var hashOfRestInfo = "0x"+data.rest_of_info_hash;
+                priceOfTransfer = data.price;
+
+                totalBytes += stringToBytes(hashOfKey).length;
+                console.log("Add bytes to BlockChain: "+stringToBytes(hashOfKey).length);
+                totalBytes += stringToBytes(hashOfRestInfo).length;
+                console.log("Add bytes to BlockChain: "+stringToBytes(hashOfRestInfo).length);
+
+                setHashLockStart =  new Date().getTime();
+                
+                Payment.setHashLock(hashOfKey, hashOfRestInfo); // start the process!!
+                console.log("- Step 3: set the hashlock ("+hashOfKey+") and the rest of the info ("+hashOfRestInfo+").");
+              },
+              error: function(){
+                alert("Cannot get data");
+              }
+        });
+
+
+        var setHashLock = Payment.SetHashLockEvent();
+        setHashLock.watch( function(error, result) {
+            if (!error)
+            {
+                setHashLockEnd =  new Date().getTime();
+
+                console.log("Step 3 result: "+result.args.result);
+                console.log("");
+                console.log("Starting Step 4: Deposit event.");
+
+                var amount_to_send_eth = web3.fromWei(web3.eth.getBalance(web3.eth.accounts[2]), "ether");
+                var amount_to_send_wei = amount_to_send_eth *1000000000000000000
+                var transactionFee = web3.eth.gasPrice * 21001;
+                var total_amount_to_send_wei = transactionFee + amount_to_send_wei/2;
+                // var total_amount_to_send_wei = transactionFee + priceOfTransfer;
+
+                totalBytes += stringToBytes(web3.eth.accounts[0]).length;
+                console.log("Add bytes to BlockChain: "+stringToBytes(web3.eth.accounts[0]).length);
+
+                console.log( "Total payment amount: "+total_amount_to_send_wei );
+                depositStart =  new Date().getTime();
+                Payment.deposit(  {from:web3.eth.accounts[0], value:total_amount_to_send_wei} );
+            }
+            else
+            {
+                console.log(error);
+            }
+        } );
+
+
+        var depositEvent = Payment.DepositEvent();
+        depositEvent.watch( function(error, result) {
+            if (!error)
+            {
+                depositEnd =  new Date().getTime();
+
+                console.log("Step 4 result: "+result.args.result);
+                console.log("");
+                console.log("Starting Step 5: Validation and Payment");
+
+                validationAndPaymentStart =  new Date().getTime();
+
+                Payment.validationAndPayment( client_S_key, web3.eth.accounts[2], {from:web3.eth.accounts[0], gas: 3000000, gasLimit: 800000000 } );
+            } 
+            else 
+            {
+                console.log(error);
+            }
+        } );
+
+
+        var validationAndPaymentEvent = Payment.ValidationAndPaymentEvent();
+        validationAndPaymentEvent.watch( function(error, result) {
+            if (!error)
+            {
+                validationAndPaymentEnd =  new Date().getTime();
+                var endingTime = new Date().getTime();
+                var endingBlock = web3.eth.blockNumber;
+
+                console.log("Step 6, is validation successful: "+result.args.validationResult);
+                console.log("Message: "+result.args.key);
+                client_S_key = result.args.key;
+          
+                getAccountTransactions(web3.eth.accounts[0], startingBlock, endingBlock, web3);
+
+                var httpResponseTime = ((httpResponse-httpRequest)/1000);
+                console.log( "\n HTTP-request in: "+httpResponseTime );
+                var setHashLockTime = ((setHashLockEnd-setHashLockStart)/1000);
+                console.log( "\n Set-hash-lock block mined in: "+setHashLockTime );
+                var depositTime = ((depositEnd-depositStart)/1000);
+                console.log( "\n Deposit block mined in: "+depositTime );
+                var validationAndPaymentTime = ((validationAndPaymentEnd-validationAndPaymentStart)/1000);
+                console.log( "\n Validation and payment block mined in: "+validationAndPaymentTime);
+                console.log( "\n Total time in: "+(httpResponseTime+setHashLockTime+depositTime+validationAndPaymentTime) );
+
+                console.log( "Total Script Time: "+((endingTime-startingTime)/1000)+" seconds" );
+                console.log( "\n Total bytes: "+totalBytes );
+            }
+            else
+            {
+                console.log(error);
+            }
+        } );
+
+                      
+        function getAccountTransactions(accAddress, startBlockNumber, endBlockNumber, web3 ) {
+          console.log("Searching for transactions to/from account \"" + accAddress + "\" within blocks "  + startBlockNumber + " and " + endBlockNumber);
+
+          var totalGas = 0;
+          var cumulativeGas = 0;
+
+          for (var i = startBlockNumber; i <= endBlockNumber; i++) {
+            var block = web3.eth.getBlock(i, true);
+
+              block.transactions.forEach( function(e) {
+                if (accAddress == "*" || accAddress == e.from || accAddress == e.to) {
+                  // console.log("  tx hash          : " + e.hash + "\n"
+                  //   + "   nonce           : " + e.nonce + "\n"
+                  //   + "   blockHash       : " + e.blockHash + "\n"
+                  //   + "   blockNumber     : " + e.blockNumber + "\n"
+                  //   + "   transactionIndex: " + e.transactionIndex + "\n"
+                  //   + "   from            : " + e.from + "\n" 
+                  //   + "   to              : " + e.to + "\n"
+                  //   + "   value           : " + e.value + "\n"
+                  //   + "   gasPrice        : " + e.gasPrice + "\n"
+                  //   + "   gas             : " + e.gas + "\n"
+                  //   + "   input           : " + e.input);
+                  
+                  var receipt = web3.eth.getTransactionReceipt(e.hash);  
+                  console.log("Block with code: "+e.blockNumber+", with gas: "+e.gas+", used: "+receipt.gasUsed+".");
+                  totalGas += receipt.gasUsed;
+                  cumulativeGas += receipt.cumulativeGasUsed; 
+                }
+              })
+          }
+          console.log("Total gas: "+totalGas);
+          console.log("Cumulative gas: "+cumulativeGas);
+        }
+
+        function stringToBytes(str) 
+        {
+          var ch, st, re = [];
+          for (var i = 0; i < str.length; i++ ) {
+            ch = str.charCodeAt(i);  // get char 
+            st = [];                 // set up "stack"
+            do {
+              st.push( ch & 0xFF );  // push byte to stack
+              ch = ch >> 8;          // shift value down by 1 byte
+            }  
+            while ( ch );
+            // add stack contents to result
+            // done because chars have "wrong" endianness
+            re = re.concat( st.reverse() );
+          }
+          // return an array of bytes
+          return re;
+        }
+
+    </script>
+
+
+
+</body>
+</html>
